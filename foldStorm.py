@@ -11,7 +11,7 @@ def td_to_seconds(td):
 
 def foldStorm(df, event_filter, threshold, window_s=0.01):
     temp = df[df["event"].str.contains(event_filter)].copy()
-    print("TEMPP:", temp)
+    #print("TEMPP:", temp)
     if temp.empty:
         return pd.DataFrame()
     
@@ -34,13 +34,31 @@ def foldStorm(df, event_filter, threshold, window_s=0.01):
             #print("COUNT: ", count)
             
             if count >= threshold:
+                window_times = times[in_window]
+
+                # inter-arrival times between syscalls
+                if len(window_times) > 1:
+                    deltas = np.diff(window_times)
+                    mean_gap = deltas.mean()
+                    jitter = deltas.std()
+                    min_gap = deltas.min()
+                    max_gap = deltas.max()
+
+                else:
+                    mean_gap = jitter = min_gap = max_gap = 0
+
                 storms.append({
                     "pid": pid,
                     "start": start_time,
                     "end": end_time,
                     "calls": count,
                     "peak": count,
-                    "duration_ms": window_s * 1000
+                    "duration_ms": window_s * 1000,
+                    # NEW FEATURES
+                    "mean_gap":mean_gap,
+                    "jitter": jitter,
+                    "min_gap": min_gap,
+                    "max_gap":max_gap
                 })
                 #print("STORM: ", storms)
                 # slide past this window
