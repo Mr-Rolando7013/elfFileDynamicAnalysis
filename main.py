@@ -82,8 +82,8 @@ wake_ratio = (
 suspicious_futex = wake_ratio[wake_ratio > 100]
 
 suspicious_pids = suspicious_futex.index.get_level_values("pid").unique()
-pid_features["suspicious_futex"] = suspicious_futex
-pid_features["suspicious_pids"] = suspicious_pids 
+#pid_features["suspicious_futex"] = suspicious_futex
+#pid_features["suspicious_pids"] = suspicious_pids 
 G_wake = nx.DiGraph()
 plt.figure(figsize=(12,6))
 
@@ -110,6 +110,7 @@ signal_df = df[df["event"].str.contains(
     "sys_kill|sys_tgkill|sys_rt_sigqueueinfo"
 )].copy()
 
+print("SIGNAL DFFF: ", signal_df)
 signal_df["target_pid"] = (
     signal_df["event"]
     .str.extract(r"pid=(\d+)")
@@ -170,10 +171,66 @@ signal_storm_score = (
     .max()
 )
 
+# Fold per pid
 pid_features["signal_storm_score"] = signal_storm_score
 pid_features["signal_storm"] = pid_features["signal_storm_score"] > 50
 
+# Fold per target pid
+target_pid_storm_score = (
+    signal_df
+    .dropna(subset=["target_pid"])
+    .groupby("target_pid")
+    .resample("10ms")
+    .size()
+)
+
+max_target_pid_storm_score = target_pid_storm_score.groupby("target_pid").max()
+
+
+pid_features["signal_target_pid_storm_score"] = pid_features.index.map(max_target_pid_storm_score)
+pid_features["signal_target_pid"] = pid_features["signal_target_pid_storm_score"] > 50
+
+target_tgid_storm_score = (
+    signal_df
+    .dropna(subset=["target_tgid"])
+    .groupby("target_tgid")
+    .resample("10ms")
+    .size()
+)
+
+max_target_tgid_storm_score = target_tgid_storm_score.groupby("target_tgid").max()
+
+pid_features["signal_target_tpid_storm_score"] = pid_features.index.map(max_target_tgid_storm_score)
+pid_features["signal_target_tpid"] = pid_features["signal_target_tpid_storm_score"] > 50
+
 G_signal = nx.DiGraph()
+
+#for idx, row in df[df["event"].str.contains("sys_kill|sys_tgkill|sys_rt_sigqueueinfo")]:
+    #target = int(row["event"].split("pid=")[1].split()[0])
+    #G_signal.add_edge(row['pid'], target, weight=G_signal[row['pid']][target]['weight']+1 if G_signal.has_edge(row['pid'], target) else 1)
+
+target_pid_rate_df = target_pid_rate.unstack(level=0).fillna(0)
+print("TARGET PID RATE: ", target_pid_rate)
+plt.figure(figsize=(11, 6))
+for pid in target_pid_rate_df.columns:
+    plt.plot(target_pid_rate_df.index.total_seconds(), target_pid_rate_df[pid], label=f"PID {int(pid)}")
+
+plt.xlabel("Time (s)")
+plt.ylabel("Signals received per 10ms")
+plt.title("Signal Reception per Target PID Over Time")
+plt.legend()
+plt.show()
+
+tgid_rate_df = tgid_rate.unstack(level=0).fillna(0)
+plt.figure(figsize=(11,6))
+for pid in tgid_rate_df.columns:
+    plt.plot(tgid_rate_df.index.total_seconds(), tgid_rate_df[pid], label=f"PID {int(pid)}")
+plt.xlabel("Time (s)")
+plt.ylabel("Signals received per 10ms")
+plt.title("Signal Reception per tgid PID over time")
+plt.legend()
+plt.show()
+
 
 # ------------------------------------------------------------------------
 # Fork storm -> Clone storm
@@ -257,15 +314,6 @@ plt.show()
 print("Number of storm PIDs:", len(storm_pids))
 print("Number of nodes in H:", H.number_of_nodes())
 print("Number of edges in H:", H.number_of_edges())
-
-
-# MIGHT DELETE THIS
-signal_df = df[df["event"].str.contains("sys_kill|sys_tgkill")]
-
-for idx, row in signal_df.iterrows():
-    target = int(row["event"].split("pid=")[1].split()[0])
-    G_signal.add_edge(row['pid'], target, weight=G[row['pid']][target]['weight']+1 if G_signal.has_edge(row['pid'], target) else 1)
-
 
 # High out-degree in wakeup graph
 
