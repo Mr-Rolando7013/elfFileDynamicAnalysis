@@ -1,0 +1,19 @@
+timestamp,probe,pid,comm,alert
+824.4647053709999,set_memory_ro,0,insmod,Sensitive probe fired
+824.464883915,set_memory_ro,0,insmod,Sensitive probe fired
+824.4650746279999,set_memory_ro,0,insmod,Sensitive probe fired
+824.4653611849999,set_memory_ro,0,insmod,Sensitive probe fired
+824.465741119,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.4774058799999,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.487634429,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.4904546879999,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.4975912389999,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.5056950709999,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.5076775339999,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.5133579599999,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.530015512,kallsyms_lookup,0,insmod,Sensitive probe fired
+824.5323867019999,set_memory_ro,0,insmod,Sensitive probe fired
+824.533031632,set_memory_ro,0,insmod,Sensitive probe fired
+824.535759186,set_memory_ro,0,insmod,Sensitive probe fired
+824.5359885339999,set_memory_ro,0,insmod,Sensitive probe fired
+824.5361850369999,set_memory_ro,0,insmod,Sensitive probe fired

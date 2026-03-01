@@ -156,10 +156,20 @@ int trace_sys_bpf(struct pt_regs *ctx)
 
     data.ts = bpf_ktime_get_ns();
     data.pid = bpf_get_current_pid_tgid() >> 32;
+    
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
 
     __builtin_memcpy(&data.info, "bpf_prog_load",
                      sizeof("bpf_prog_load"));
+
+    u64 uid_gid = bpf_get_current_uid_gid();
+    u32 uid = uid_gid & 0xFFFFFFFF;
+
+    if (uid != 0){
+        __builtin_memcpy(&data.info, "bpf_prog_load_nonroot",
+                         sizeof("bpf_prog_load_nonroot"));
+
+    }
 
     events.perf_submit(ctx, &data, sizeof(data));
     return 0;
@@ -268,17 +278,6 @@ int trace_bpf_map_delete_elem(struct pt_regs *ctx) {
 
 """
 
-# Make sure debugfs is mounted
-debugfs_path = "/sys/kernel/debug/tracing"
-if not os.path.exists(debugfs_path):
-    subprocess.run(["mount", "-t", "debugfs", "none", debugfs_path], check=True)
-
-enabled_functions_path = f"{debugfs_path}/enabled_functions"
-
-# --- Snapshot before module load ---
-with open(enabled_functions_path, "r") as f:
-    before = set(f.read().splitlines())
-
 # ================= LOAD BPF =================
 print("[*] Loading BPF program...")
 b = BPF(text=bpf_text)
@@ -300,8 +299,8 @@ b.attach_kprobe(event="__x64_sys_bpf", fn_name="trace_sys_bpf")
 b.attach_kprobe(event="bpf_map_update_elem", fn_name="trace_bpf_map_update_elem")
 b.attach_kprobe(event="bpf_map_lookup_elem", fn_name="trace_bpf_map_lookup_elem")
 b.attach_kprobe(event="bpf_map_delete_elem", fn_name="trace_bpf_map_delete_elem")
-b.attach_kprobe(event="bpf_attach", fn_name="trace_bpf_attach")
-b.attach_kprobe(event="bpf_xdp_attach", fn_name="trace_xdp_attach")
+b.attach_kprobe(event="__cgroup_bpf_attach", fn_name="trace_bpf_attach")
+b.attach_kprobe(event="dev_xdp_attach", fn_name="trace_xdp_attach")
 
 # ================= HANDLERS =================
 open_events_list = []
@@ -359,38 +358,20 @@ def handle_bpf_prog_event(cpu, data, size):
         "event": event.event.decode('utf-8', 'replace')
     })
 
+
+
 b["open_events"].open_perf_buffer(handle_open)
 b["events"].open_perf_buffer(handle_event)
 b["bpf_map_events"].open_perf_buffer(handle_bpf_map_event)
 b["bpf_prog_events"].open_perf_buffer(handle_bpf_prog_event)
 
+proc = subprocess.Popen([module_path])
+
+sleep(1)
+
 # ================= RUN MODULE =================
 print("[*] Tracer running...")
 print("[*] Loading module:", module_path)
-proc = subprocess.Popen(["insmod", module_path])
-
-# --- Snapshot after module load ---
-with open(enabled_functions_path, "r") as f:
-    after = set(f.read().splitlines())
-
-# --- Compare ---
-new_hooks = after - before
-if new_hooks:
-    print("[!] New ftrace hooks detected:")
-    for hook in new_hooks:
-        print(" ", hook)
-else:
-    print("[*] No new ftrace hooks detected")
-
-try:
-    while True:
-        b.perf_buffer_poll(timeout=100)
-        if proc.poll() is not None:
-            break
-except KeyboardInterrupt:
-    pass
-
-sleep(1)
 
 # ================= SAVE CSV =================
 df_open = pd.DataFrame(open_events_list)

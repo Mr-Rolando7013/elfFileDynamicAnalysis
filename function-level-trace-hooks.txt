@@ -1,0 +1,7 @@
+  kallsyms_lookup_name (1) R         	tramp: 0xffffffffc0a90000 (kprobe_ftrace_handler+0x0/0x260) ->kprobe_ftrace_handler+0x0/0x260
+  set_memory_rw (1) R         	tramp: 0xffffffffc0a90000 (kprobe_ftrace_handler+0x0/0x260) ->kprobe_ftrace_handler+0x0/0x260
+  __x64_sys_bpf (1) R         	tramp: 0xffffffffc0a90000 (kprobe_ftrace_handler+0x0/0x260) ->kprobe_ftrace_handler+0x0/0x260
+  text_poke (1) R         	tramp: 0xffffffffc0a90000 (kprobe_ftrace_handler+0x0/0x260) ->kprobe_ftrace_handler+0x0/0x260
+  __x64_sys_kill (1) R         	tramp: 0xffffffffc0a90000 (kprobe_ftrace_handler+0x0/0x260) ->kprobe_ftrace_handler+0x0/0x260
+  set_memory_ro (1) R         	tramp: 0xffffffffc0a90000 (kprobe_ftrace_handler+0x0/0x260) ->kprobe_ftrace_handler+0x0/0x260
+  proc_pid_readdir (1) R         	tramp: 0xffffffffc0a90000 (kprobe_ftrace_handler+0x0/0x260) ->kprobe_ftrace_handler+0x0/0x260
