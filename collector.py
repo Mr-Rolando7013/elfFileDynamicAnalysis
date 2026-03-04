@@ -1,10 +1,29 @@
 from bcc import BPF
 import time
 import os
+import ctypes
 
-def handle_bpf_prog_event(cpu, data, size):
-    event = b["bpf_prog_events"].event(data)
-    print(f"[BPF_ATTACH] PID {event.pid} ({event.comm}): prog_id={event.prog_id}")
+TASK_COMM_LEN = 16
+
+
+class SimpleEvent(ctypes.Structure):
+    _fields_ = [
+        ("ts", ctypes.c_uint64),
+        ("pid", ctypes.c_uint32),
+        ("uid", ctypes.c_uint32),
+        ("comm", ctypes.c_char * TASK_COMM_LEN),
+        ("action", ctypes.c_char * 8),
+        ("module", ctypes.c_char * 64),
+    ]
+
+def callback(ctx, data, size):
+    event = ctypes.cast(data, ctypes.POINTER(SimpleEvent)).contents
+    print(
+        event.pid,
+        event.comm.decode().rstrip("\x00"),
+        event.action.decode().rstrip("\x00"),
+        event.module.decode().rstrip("\x00"),
+    )
 
 bpf_text = open("monitor.c").read()
 b = BPF(text=bpf_text)
@@ -17,15 +36,17 @@ b.attach_kprobe(event="__x64_sys_kill", fn_name="trace_sys_kill")
 b.attach_kprobe(event="set_memory_rw", fn_name="trace_set_memory_rw")
 b.attach_kprobe(event="set_memory_ro", fn_name="trace_set_memory_ro")
 b.attach_kprobe(event="__x64_sys_bpf", fn_name="trace_sys_bpf")
-b.attach_kprobe(event="bpf_map_update_elem", fn_name="trace_bpf_map_update_elem")
-b.attach_kprobe(event="bpf_map_lookup_elem", fn_name="trace_bpf_map_lookup_elem")
-b.attach_kprobe(event="bpf_map_delete_elem", fn_name="trace_bpf_map_delete_elem")
+# These three generate a lot of noise, gotta delete them if I want more context.
+#b.attach_kprobe(event="bpf_map_update_elem", fn_name="trace_bpf_map_update_elem")
+#b.attach_kprobe(event="bpf_map_lookup_elem", fn_name="trace_bpf_map_lookup_elem")
+#b.attach_kprobe(event="bpf_map_delete_elem", fn_name="trace_bpf_map_delete_elem")
 b.attach_kprobe(event="__cgroup_bpf_attach", fn_name="trace_bpf_attach")
 b.attach_kprobe(event="dev_xdp_attach", fn_name="trace_xdp_attach")
 
 # Tracepoints
-b.attach_tracepoint(tp="syscalls:sys_enter_openat", fn_name="trace_openat")
-b.attach_tracepoint(tp="syscalls:sys_exit_openat", fn_name="trace_openat_ret")
+# These two generate a lot of noise, gotta delete them if I want more context.
+#b.attach_tracepoint(tp="syscalls:sys_enter_openat", fn_name="trace_openat")
+#b.attach_tracepoint(tp="syscalls:sys_exit_openat", fn_name="trace_openat_ret")
 b.attach_tracepoint(tp="module:module_load", fn_name="trace_module_load")
 b.attach_tracepoint(tp="module:module_free", fn_name="trace_module_free")
 
@@ -36,6 +57,8 @@ print("[*] Press Ctrl+C to stop\n")
 MY_PID = os.getpid()
 
 ALERT_THRESHOLD = 1
+
+b["events"].open_perf_buffer(callback)
 
 try:
     while True:
@@ -59,9 +82,6 @@ try:
                     value.module_free >= ALERT_THRESHOLD or
                     value.bpf_attach >= ALERT_THRESHOLD or
                     value.xdp_attach >= ALERT_THRESHOLD or
-                    value.map_update >= ALERT_THRESHOLD or
-                    value.map_lookup >= ALERT_THRESHOLD or
-                    value.map_delete >= ALERT_THRESHOLD or
                     value.sys_kill >= ALERT_THRESHOLD or
                     value.mem_ro >= ALERT_THRESHOLD):
 
@@ -75,9 +95,6 @@ try:
                         f"module_free={value.module_free}, "
                         f"bpf_attach={value.bpf_attach}, "
                         f"xdp_attach={value.xdp_attach}, "
-                        f"map_update={value.map_update}, "
-                        f"map_lookup={value.map_lookup}, "
-                        f"map_delete={value.map_delete}, "
                         f"sys_kill={value.sys_kill}, "
                         f"mem_ro={value.mem_ro}")
 

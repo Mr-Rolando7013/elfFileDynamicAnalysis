@@ -1,6 +1,11 @@
 #include <uapi/linux/ptrace.h>
+#include <uapi/linux/bpf.h>
+#include <linux/sched.h>
+#include <linux/limits.h>
+#include <linux/string.h>
 
 #define COMM_LEN 16
+#define DATA_LOC_PTR(ctx, field) ((char *)ctx + ((ctx->field) & 0xFFFF))
 
 struct stats_t {
     char comm[16];
@@ -13,9 +18,6 @@ struct stats_t {
     u64 proc_readdir;
     u64 bpf_attach;
     u64 xdp_attach;
-    u64 map_update;
-    u64 map_lookup;
-    u64 map_delete;
     u64 sys_kill;
     u64 mem_ro;
 };
@@ -67,18 +69,9 @@ static void update_stat(u32 pid, int field) {
             __sync_fetch_and_add(&s->xdp_attach, 1);
             break;
         case 9:
-            __sync_fetch_and_add(&s->map_update, 1);
-            break;
-        case 10:
-            __sync_fetch_and_add(&s->map_lookup, 1);
-            break;
-        case 11:
-            __sync_fetch_and_add(&s->map_delete, 1);
-            break;
-        case 12:
             __sync_fetch_and_add(&s->sys_kill, 1);
             break;
-        case 13:
+        case 10:
             __sync_fetch_and_add(&s->mem_ro, 1);
             break;
         default:
@@ -92,15 +85,47 @@ int trace_text_poke(struct pt_regs *ctx) {
     return 0;
 }
 
+struct simple_event_t {
+    u64 ts;
+    u32 pid;
+    u32 uid;
+    char comm[COMM_LEN];
+    char action[8];
+    char module[64];
+};
+
+BPF_PERF_OUTPUT(events);
+
+/* Trace module load */
 int trace_module_load(struct tracepoint__module__module_load *ctx) {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 1);
+    struct simple_event_t event = {};
+    event.ts  = bpf_ktime_get_ns();
+    event.pid = bpf_get_current_pid_tgid() >> 32;
+    event.uid = bpf_get_current_uid_gid() & 0xffffffff;
+
+    bpf_get_current_comm(&event.comm, sizeof(event.comm));
+    __builtin_memcpy(event.action, "LOAD", 5);
+
+    __u32 offset = ctx->data_loc_name & 0xffff;
+    bpf_probe_read_str(event.module, sizeof(event.module), (char *)ctx + offset);
+
+    events.perf_submit(ctx, &event, sizeof(event));
     return 0;
 }
 
 int trace_module_free(struct tracepoint__module__module_free *ctx) {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 2);
+    struct simple_event_t event = {};
+    event.ts  = bpf_ktime_get_ns();
+    event.pid = bpf_get_current_pid_tgid() >> 32;
+    event.uid = bpf_get_current_uid_gid() & 0xffffffff;
+
+    bpf_get_current_comm(&event.comm, sizeof(event.comm));
+    __builtin_memcpy(event.action, "FREE", 5);
+
+    __u32 offset = ctx->data_loc_name & 0xffff;
+    bpf_probe_read_str(event.module, sizeof(event.module), (char *)ctx + offset);
+
+    events.perf_submit(ctx, &event, sizeof(event));
     return 0;
 }
 
@@ -140,32 +165,14 @@ int trace_xdp_attach(struct pt_regs *ctx) {
     return 0;
 }
 
-int trace_bpf_map_update_elem(struct pt_regs *ctx) {
+int trace_sys_kill(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
     update_stat(pid, 9);
     return 0;
 }
 
-int trace_bpf_map_lookup_elem(struct pt_regs *ctx) {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 10);
-    return 0;
-}
-
-int trace_bpf_map_delete_elem(struct pt_regs *ctx) {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 11);
-    return 0;
-}
-
-int trace_sys_kill(struct pt_regs *ctx) {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 12);
-    return 0;
-}
-
 int trace_set_memory_ro(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 13);
+    update_stat(pid, 10);
     return 0;
 }
