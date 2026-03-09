@@ -3,9 +3,11 @@
 #include <linux/sched.h>
 #include <linux/limits.h>
 #include <linux/string.h>
+#include <linux/netdevice.h>
 
 #define COMM_LEN 16
 #define DATA_LOC_PTR(ctx, field) ((char *)ctx + ((ctx->field) & 0xFFFF))
+#define BPF_PROG_LOAD 5
 
 struct stats_t {
     char comm[16];
@@ -135,9 +137,34 @@ int trace_set_memory_rw(struct pt_regs *ctx) {
     return 0;
 }
 
+struct prog_load_event_t {
+    u32 pid;
+    u32 uid;
+    u64 ts;
+    char comm[COMM_LEN];
+};
+
+BPF_PERF_OUTPUT(prog_load_events);
+
 int trace_sys_bpf(struct pt_regs *ctx) {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 4);
+     int cmd = PT_REGS_PARM1(ctx);
+
+    // Only care about program loads
+    if (cmd != BPF_PROG_LOAD)
+        return 0;
+
+    struct prog_load_event_t evt = {};
+
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    evt.pid = pid_tgid >> 32;
+    evt.uid = bpf_get_current_uid_gid();
+
+    evt.ts = bpf_ktime_get_ns();
+
+    bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
+
+    prog_load_events.perf_submit(ctx, &evt, sizeof(evt));
+    update_stat(evt.pid, 5);
     return 0;
 }
 
@@ -159,9 +186,24 @@ int trace_bpf_attach(struct pt_regs *ctx) {
     return 0;
 }
 
-int trace_xdp_attach(struct pt_regs *ctx) {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    update_stat(pid, 8);
+struct event_t {
+    u32 pid;
+    char comm[COMM_LEN];
+    char ifname[16];
+};
+
+BPF_PERF_OUTPUT(events2);
+
+// Buggy
+int trace_xdp_attach(struct pt_regs *ctx, struct net_device *dev) {
+    struct event_t evt = {};
+
+    evt.pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
+    bpf_probe_read_kernel_str(evt.ifname, sizeof(evt.ifname), dev->name);
+    events2.perf_submit(ctx, &evt, sizeof(evt));
+
+    update_stat(evt.pid, 7);
     return 0;
 }
 

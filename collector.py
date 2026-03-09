@@ -59,6 +59,8 @@ MY_PID = os.getpid()
 ALERT_THRESHOLD = 1
 
 b["events"].open_perf_buffer(callback)
+b["events2"].open_perf_buffer(callback)
+b["prog_load_events"].open_perf_buffer(callback)
 
 try:
     while True:
