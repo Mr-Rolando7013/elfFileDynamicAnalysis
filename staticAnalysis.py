@@ -1,9 +1,10 @@
 import re
 import subprocess
+import json
 from collections import defaultdict
 
 # -----------------------------
-# Regex patterns
+# Regex patterns (for instructions)
 # -----------------------------
 
 CALL_RE = re.compile(r'call\s+([a-zA-Z0-9_#]+)')
@@ -42,53 +43,99 @@ HOOK_BEHAVIOR_RULES = {
 }
 
 # -----------------------------
-# Context extraction
+# JSON helpers
 # -----------------------------
 
-def get_prog_context(prog_id):
+def run_bpftool_json(cmd):
     result = subprocess.run(
-        ["bpftool", "prog", "show", "id", str(prog_id)],
+        cmd,
         capture_output=True,
         text=True
     )
 
-    output = result.stdout
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
 
-    ctx = {
-        "type": None,
-        "name": None
+# -----------------------------
+# Get all programs (JSON)
+# -----------------------------
+
+def get_all_programs():
+    data = run_bpftool_json(["bpftool", "-j", "prog", "list"])
+    if not data:
+        return []
+
+    programs = []
+
+    for prog in data:
+        programs.append({
+            "id": prog.get("id"),
+            "type": prog.get("type"),
+            "name": prog.get("name"),
+            "tag": prog.get("tag")
+        })
+
+    return programs
+
+# -----------------------------
+# Get program context (JSON)
+# -----------------------------
+
+def get_prog_context(prog_id):
+    data = run_bpftool_json(["bpftool", "-j", "prog", "show", "id", str(prog_id)])
+
+    if not data:
+        return {"type": None, "name": None}
+
+    # 🔥 FIX: handle both dict and list
+    if isinstance(data, list):
+        prog = data[0]
+    elif isinstance(data, dict):
+        prog = data
+    else:
+        return {"type": None, "name": None}
+
+    return {
+        "type": prog.get("type"),
+        "name": prog.get("name"),
+        "attach_type": prog.get("attach_type"),
+        "attach_func": prog.get("attach_func")
     }
+# -----------------------------
+# Dump instructions (text)
+# -----------------------------
 
-    if "xdp" in output:
-        ctx["type"] = "xdp"
-    elif "tracepoint" in output:
-        ctx["type"] = "tracepoint"
-    elif "kprobe" in output:
-        ctx["type"] = "kprobe"
+def dump_prog_instructions(prog_id):
+    result = subprocess.run(
+        ["bpftool", "prog", "dump", "xlated", "id", str(prog_id)],
+        capture_output=True,
+        text=True
+    )
 
-    name_match = re.search(r'name\s+([^\s]+)', output)
-    if name_match:
-        ctx["name"] = name_match.group(1)
-
-    return ctx
+    return result.stdout.splitlines()
 
 # -----------------------------
 # Hook classification
 # -----------------------------
 
 def classify_hook(ctx):
-    name = ctx.get("name", "") or ""
+    name = (ctx.get("name") or "").lower()
+    attach_func = (ctx.get("attach_func") or "").lower()
 
-    if "getdents" in name:
+    combined = name + " " + attach_func
+
+    if "getdents" in combined:
         return "filesystem_listing"
 
-    if "tcp" in name or "udp" in name:
+    if any(x in combined for x in ["tcp", "udp", "recvmsg", "sendmsg"]):
         return "network_io"
 
-    if "execve" in name:
+    if "execve" in combined:
         return "process_execution"
 
-    if "open" in name:
+    if "open" in combined:
         return "file_access"
 
     if ctx.get("type") == "xdp":
@@ -167,10 +214,7 @@ def classify_instruction(inst, idx):
 # Analyzer
 # -----------------------------
 
-def analyze(filepath):
-    with open(filepath, "r") as f:
-        lines = f.readlines()
-
+def analyze_lines(lines):
     nodes = []
     signals = []
     edges = []
@@ -206,32 +250,29 @@ def extract_signal_counts(graph):
     return dict(counts)
 
 # -----------------------------
-# Behavior inference (CONTEXT-AWARE)
+# Behavior inference
 # -----------------------------
 
 def infer_behavior(signal_counts, hook_type):
 
-    # 🔴 getdents rootkit pattern
     if hook_type == "filesystem_listing":
         if signal_counts.get("selective_filtering", 0) > 0:
             if signal_counts.get("kernel_data_modification", 0) > 0:
                 return "LIKELY_ROOTKIT_FILE_HIDING"
 
-    # 🟠 generic stealth modification
     if (
         signal_counts.get("selective_filtering", 0) > 0 and
         signal_counts.get("kernel_data_modification", 0) > 0
     ):
         return "possible_stealth_modification"
 
-    # 🟡 normal tracing
     if signal_counts.get("syscall_inspection", 0) > 0:
         return "likely_observability"
 
     return "unknown"
 
 # -----------------------------
-# Contextual risk scoring
+# Risk scoring
 # -----------------------------
 
 def contextual_risk(graph, ctx):
@@ -260,7 +301,7 @@ def contextual_risk(graph, ctx):
     return score, findings, hook_type
 
 # -----------------------------
-# Final summary builder
+# Summary builder
 # -----------------------------
 
 def build_summary(graph, ctx):
@@ -272,10 +313,11 @@ def build_summary(graph, ctx):
 
     risk_score, findings, _ = contextual_risk(graph, ctx)
 
-    summary = {
+    return {
         "hook_name": ctx.get("name"),
         "hook_type": hook_type,
         "program_type": ctx.get("type"),
+        "attach_func": ctx.get("attach_func"),
 
         "total_instructions": len(graph["nodes"]),
         "signal_distribution": signal_counts,
@@ -291,27 +333,59 @@ def build_summary(graph, ctx):
         "findings": findings
     }
 
-    return summary
+# -----------------------------
+# Cross-program correlation
+# -----------------------------
+
+def correlate_programs(programs):
+    patterns = []
+
+    hooks = [p["summary"]["hook_name"] or "" for p in programs]
+    types = [p["summary"]["program_type"] for p in programs]
+
+    if any("getdents" in h for h in hooks):
+        if "xdp" in types:
+            patterns.append("filesystem_hiding + network_component")
+
+    return patterns
 
 # -----------------------------
-# Main
+# MAIN
 # -----------------------------
 
 if __name__ == "__main__":
-    prog_id = 123  # <-- CHANGE THIS
+    programs_meta = get_all_programs()
 
-    ctx = get_prog_context(prog_id)
+    print(f"[+] Found {len(programs_meta)} eBPF programs")
 
-    graph = analyze("getdents_patch.txt")
+    analyzed_programs = []
 
-    summary = build_summary(graph, ctx)
+    for prog in programs_meta:
+        prog_id = prog["id"]
 
-    print("\n=== CONTEXT ===")
-    print(ctx)
+        print(f"\n[+] Analyzing program ID: {prog_id}")
 
-    print("\n=== SIGNALS ===")
-    for s in graph["signals"]:
-        print(s)
+        ctx = get_prog_context(prog_id)
 
-    print("\n=== SUMMARY ===")
-    print(summary)
+        lines = dump_prog_instructions(prog_id)
+        if not lines:
+            continue
+
+        graph = analyze_lines(lines)
+
+        summary = build_summary(graph, ctx)
+
+        analyzed_programs.append({
+            "id": prog_id,
+            "context": ctx,
+            "summary": summary
+        })
+
+        print(summary)
+
+    print("\n=== CROSS PROGRAM ANALYSIS ===")
+
+    patterns = correlate_programs(analyzed_programs)
+
+    for p in patterns:
+        print("[!] Detected pattern:", p)
